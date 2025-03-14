@@ -1,0 +1,42 @@
+{
+  "name": "didit-node-client",
+  "version": "1.0.0",
+  "description": "Node.js client library for the DiDiT verification API",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "test": "jest"
+  },
+  "keywords": [
+    "didit",
+    "verification",
+    "kyc",
+    "identity"
+  ],
+  "author": "Awais Jameel",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.5"
+  },
+  "peerDependencies": {
+    "express": "^4.17.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "jest": "^29.7.0",
+    "@types/node": "^20.10.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awaisjameel/didit-node-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/awaisjameel/didit-node-client/issues"
+  },
+  "homepage": "https://github.com/awaisjameel/didit-node-client#readme"
+}
