@@ -1,6 +1,6 @@
 {
   "name": "didit-node-client",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Node.js client library for the DiDiT verification API",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
