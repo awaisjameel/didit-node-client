@@ -41,7 +41,7 @@ Environment variables:
 // Create a new verification session
 const session = await client.createSession(
   "https://your-callback-url.com",
-  { userId: "123" }, // Optional vendor data
+  "123", // optional Unique identifier or data for the vendor, typically the identifier of the user trying to verify.
   {
     features: "OCR + NFC + FACE", // Optional features configuration
   }

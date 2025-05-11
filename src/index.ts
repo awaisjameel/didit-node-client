@@ -175,7 +175,7 @@ interface SessionDecision {
 interface SessionOptions {
   callback: string;
   features?: string;
-  vendor_data?: Record<string, any>;
+  vendor_data?: string;
 }
 
 interface WebhookHeaders {
@@ -405,14 +405,14 @@ class DiDiTClient {
   /**
    * Creates a new verification session
    * @param callback_url - The URL to redirect to after verification
-   * @param vendor_data - Optional custom data to associate with the session
-   * @param options - Additional session configuration options
+   * @param vendor_data - optional Unique identifier or data for the vendor, typically the identifier of the user trying to verify
+   * @param options - Optional Additional session options "{'features': 'OCR + NFC + FACE'}", etc. If omitted, uses settings from console
    * @returns Promise resolving to the created session data
    * @throws Error if session creation fails
    */
   public async createSession(
     callback_url: string,
-    vendor_data?: Record<string, any>,
+    vendor_data?: string,
     options: Partial<SessionOptions> = {}
   ): Promise<SessionResponse> {
     if (!callback_url) {

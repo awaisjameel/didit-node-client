@@ -72,9 +72,7 @@ describe("DiDiTClient", () => {
     });
 
     it("should create a session", async () => {
-      const session = await client.createSession("https://callback.url", {
-        test: "data",
-      });
+      const session = await client.createSession("https://callback.url", "123");
       expect(session).toEqual({ session_id: "test-session" });
     });
 
