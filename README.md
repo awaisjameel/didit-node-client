@@ -1,6 +1,72 @@
-# DiDiT Node.js Client
+# didit-node-client
 
-A Node.js client library for integrating with the DiDiT verification API. This client handles authentication, session management, PDF report generation, and webhook processing.
+[![npm version](https://img.shields.io/npm/v/didit-node-client.svg)](https://www.npmjs.com/package/didit-node-client)
+[![npm downloads](https://img.shields.io/npm/dm/didit-node-client.svg)](https://www.npmjs.com/package/didit-node-client)
+[![license](https://img.shields.io/npm/l/didit-node-client.svg)](./LICENSE)
+[![types](https://img.shields.io/npm/types/didit-node-client.svg)](./dist/index.d.ts)
+
+A modern, fully-typed Node.js client for the [Didit](https://didit.me) Identity Verification
+API (**v3**) — hosted KYC/KYB sessions, standalone document verification, and secure webhook
+handling, with sane defaults and no surprises.
+
+```ts
+import { DiditClient } from "didit-node-client";
+
+const didit = new DiditClient({ apiKey: process.env.DIDIT_API_KEY });
+
+const session = await didit.sessions.create({
+  workflow_id: process.env.DIDIT_WORKFLOW_ID!,
+  vendor_data: user.id,
+  callback: "https://example.com/verification/callback",
+});
+
+// Redirect the user here to complete verification:
+res.redirect(session.url);
+```
+
+> **Upgrading from 1.x?** Didit's API moved from v1 (OAuth2 `client_id`/`client_secret`) to v3
+> (a single `x-api-key`). This is a breaking major release — see [MIGRATION.md](./MIGRATION.md).
+
+---
+
+## Table of contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Getting your credentials](#getting-your-credentials)
+- [Configuration](#configuration)
+- [Sessions API](#sessions-api)
+  - [Create a session](#create-a-session)
+  - [Retrieve a decision](#retrieve-a-decision)
+  - [List &amp; paginate sessions](#list--paginate-sessions)
+  - [Update status (approve / decline / resubmit)](#update-status-approve--decline--resubmit)
+  - [Correct extracted data](#correct-extracted-data)
+  - [Generate a PDF report](#generate-a-pdf-report)
+- [Standalone ID Verification](#standalone-id-verification)
+- [Webhooks](#webhooks)
+  - [Express](#express)
+  - [Any other framework](#any-other-framework)
+  - [Event types](#event-types)
+- [Error handling](#error-handling)
+- [Retries, timeouts &amp; rate limits](#retries-timeouts--rate-limits)
+- [TypeScript](#typescript)
+- [Security best practices](#security-best-practices)
+- [Examples](#examples)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features
+
+- 🔑 **v3-native** — built against Didit's current `x-api-key` + `workflow_id` API, KYC and KYB alike.
+- 🧩 **Full session lifecycle** — create, retrieve, list (with auto-pagination), approve/decline/resubmit, correct OCR/registry data, and render PDF reports.
+- 🪪 **Standalone ID verification** — one-shot document checks without spinning up a hosted session.
+- 🔐 **Robust webhooks** — verifies all three signature schemes Didit sends (`X-Signature-V2`, `X-Signature`, `X-Signature-Simple`), accepting the payload if _any_ validates, with replay protection via timestamp freshness checks.
+- 🔁 **Automatic retries** — exponential backoff with jitter on network errors, `429`, and `5xx`, honoring `Retry-After`. Safe by default (only idempotent `GET`s retry automatically).
+- 🎯 **End-to-end TypeScript** — every request and response is fully typed, including the full decision schema (`id_verifications`, `aml_screenings`, `face_matches`, `liveness_checks`, KYB `registry_checks`, ...).
+- 📦 **Dual CJS/ESM** — works with `require()` and `import` out of the box, tree-shakeable.
+- 🪶 **Small dependency footprint** — just `axios` and `form-data`.
+- 🧵 **Cancellable** — every call accepts an `AbortSignal`.
+- 🧪 **Well tested** — extensive unit tests covering HTTP retries, error mapping, and webhook signature verification (including tamper/replay rejection).
 
 ## Installation
 
@@ -8,164 +74,344 @@ A Node.js client library for integrating with the DiDiT verification API. This c
 npm install didit-node-client
 ```
 
+Requires Node.js **18+**. `express` is an optional peer dependency, needed only if you use
+[`createRawBodyMiddleware`](#express).
+
+## Getting your credentials
+
+1. Create an account in the [Didit Business Console](https://business.didit.me).
+2. Build a verification workflow (KYC or KYB) and note its **Workflow ID**.
+3. Generate an **API Key** under Settings → API Keys — this is a long-lived secret, backend-only.
+4. (Optional, for webhooks) Configure a webhook destination and copy its **Webhook Secret**.
+
 ## Configuration
 
-```typescript
-import { DiDiTClient } from "didit-node-client";
+```ts
+import { DiditClient } from "didit-node-client";
 
-const client = new DiDiTClient({
-  clientId: "your_client_id",
-  clientSecret: "your_client_secret",
-  webhookSecret: "your_webhook_secret", // Required for webhook verification
-  baseUrl: "https://verification.didit.me", // Optional
-  authUrl: "https://apx.didit.me", // Optional
-  tokenExpiryBuffer: 300, // Optional: Buffer time in seconds before token expiry
-  timeout: 10000, // Optional: Request timeout in milliseconds
-  debug: false, // Optional: Enable debug logging
+const didit = new DiditClient({
+  apiKey: "your_api_key", // or set DIDIT_API_KEY
+  webhookSecret: "your_webhook_secret", // or set DIDIT_WEBHOOK_SECRET — only needed for webhooks
+  baseUrl: "https://verification.didit.me", // optional, for testing against a mock server
+  timeout: 15_000, // optional, per-request timeout in ms (default 15000)
+  maxRetries: 2, // optional, automatic retries for safe requests (default 2)
+  debug: false, // optional, verbose logging with secrets redacted
 });
 ```
 
-Environment variables:
+`new DiditClient()` with no arguments works too, as long as the environment variables below are
+set — handy for serverless/edge configs that inject env vars directly.
 
-- `DIDIT_CLIENT_ID`
-- `DIDIT_CLIENT_SECRET`
-- `DIDIT_WEBHOOK_SECRET`
-- `DIDIT_BASE_URL`
-- `DIDIT_AUTH_URL`
+| Environment variable   | Maps to         | Required                     |
+| ---------------------- | --------------- | ---------------------------- |
+| `DIDIT_API_KEY`        | `apiKey`        | Yes (unless passed directly) |
+| `DIDIT_WEBHOOK_SECRET` | `webhookSecret` | Only if using webhooks       |
+| `DIDIT_BASE_URL`       | `baseUrl`       | No                           |
 
-## Features
+## Sessions API
 
-### Session Management
+The hosted flow: create a session, send your user to `session.url` to complete verification in
+Didit's UI, then learn the result via [webhook](#webhooks) (recommended) or by retrieving the
+decision directly.
 
-```typescript
-// Create a new verification session
-const session = await client.createSession(
-  "https://your-callback-url.com",
-  "123", // optional Unique identifier or data for the vendor, typically the identifier of the user trying to verify.
-  {
-    features: "OCR + NFC + FACE", // Optional features configuration
-  }
-);
+### Create a session
 
-// Get session details and verification decision
-const sessionDecision = await client.getSession("session_id");
-
-// Update session status (Approve/Decline)
-const updatedSession = await client.updateSessionStatus(
-  "session_id",
-  "Approved",
-  "Verification completed successfully" // Optional comment
-);
-
-// Generate PDF report
-const pdfBuffer = await client.generateSessionPDF("session_id");
-```
-
-### Webhook Processing
-
-```typescript
-import express from "express";
-import { createRawBodyMiddleware, DiDiTClient } from "didit-node-client";
-
-const app = express();
-const client = new DiDiTClient({
-  webhookSecret: "your_webhook_secret",
+```ts
+const session = await didit.sessions.create({
+  workflow_id: "wf_...", // required — selects KYC vs KYB and the verification steps
+  vendor_data: user.id, // your own identifier; enables session reuse + easy correlation
+  callback: "https://example.com/verification/callback",
+  callback_method: "both", // "initiator" | "completer" | "both" — who gets redirected
+  metadata: { plan: "pro" }, // arbitrary JSON, echoed back on the session and in webhooks
+  language: "en",
+  contact_details: { email: user.email, send_notification_emails: true },
+  expected_details: { first_name: user.firstName, last_name: user.lastName },
 });
 
-// Add raw body middleware for webhook signature verification
-app.use("/webhook", createRawBodyMiddleware());
+session.url; // -> redirect or embed your user here
+session.session_id; // -> store this alongside your user record
+```
 
-app.post("/webhook", (req, res) => {
-  try {
-    const payload = client.processWebhook(req);
-    console.log("Webhook received:", payload);
+If `vendor_data` matches an unfinished session on the workflow's current published version,
+Didit returns that session instead of creating a duplicate — safe to call more than once for
+the same user.
 
-    // Handle different webhook events
-    switch (payload.event_type) {
-      case "session.completed":
-        // Handle completed session
-        break;
-      case "session.declined":
-        // Handle declined session
-        break;
-      // ... handle other events
-    }
+`portrait_image` (for Face Match workflows) accepts a `Buffer` directly; the SDK base64-encodes
+it for you:
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Webhook error:", error);
-    res.status(400).json({ error: error.message });
-  }
+```ts
+await didit.sessions.create({
+  workflow_id: "wf_...",
+  portrait_image: fs.readFileSync("selfie.jpg"), // max 2MB
 });
 ```
 
-## Error Handling
+### Retrieve a decision
 
-The client includes comprehensive error handling with context:
+```ts
+const decision = await didit.sessions.retrieve(session.session_id);
 
-```typescript
-try {
-  const session = await client.createSession("https://callback-url.com");
-} catch (error) {
-  console.error("Error:", error.message);
-  console.error("Context:", error.context);
-  console.error("Original Error:", error.originalError);
-  console.error("API Response:", error.response?.data);
+decision.status; // "Approved" | "Declined" | "In Review" | ...
+decision.id_verifications?.[0]?.full_name;
+decision.aml_screenings?.[0]?.hits;
+decision.face_matches?.[0]?.score;
+```
+
+Every feature result (`id_verifications`, `nfc_verifications`, `liveness_checks`,
+`face_matches`, `aml_screenings`, `poa_verifications`, `phone_verifications`,
+`email_verifications`, `ip_analyses`, `database_validations`, and the KYB-only
+`registry_checks` / `document_verifications` / `key_people_checks`) is an array, `undefined`
+until that feature runs. Media URLs (images/video) are **short-lived presigned links** — use
+them promptly, or call `retrieve()` again for fresh ones.
+
+### List & paginate sessions
+
+```ts
+// One page:
+const page = await didit.sessions.list({ status: ["Approved", "In Review"], limit: 20 });
+
+// Every matching session, transparently paginated:
+for await (const session of didit.sessions.listAll({ workflow_id: "wf_..." })) {
+  console.log(session.session_id, session.status);
 }
 ```
 
-## Authentication
+Array filters (`status`, `workflow_id`, `country`, `document_type`) are automatically joined
+into the comma-separated form the API expects.
 
-The client automatically handles:
+### Update status (approve / decline / resubmit)
 
-- Token acquisition and caching
-- Token refresh before expiry
-- Token rotation
-- Request authentication
+```ts
+await didit.sessions.updateStatus(session.session_id, {
+  new_status: "Approved",
+  comment: "Manually cleared after review",
+});
 
-## TypeScript Support
+// Request resubmission of specific steps:
+await didit.sessions.updateStatus(session.session_id, {
+  new_status: "Resubmitted",
+  nodes_to_resubmit: [{ node_id: "id_verification_1", feature: "ID_VERIFICATION" }],
+  send_email: true,
+  email_address: user.email,
+});
+```
 
-Import types for better type safety:
+This call is **not idempotent** — resending the same request returns a `400`. The session must
+already be in a terminal-ish status (`Approved`, `Declined`, `In Review`, `Kyc Expired`,
+`Abandoned`, or `Resubmitted`).
 
-```typescript
-import {
-  DiDiTClient,
-  SessionOptions,
-  WebhookEvent,
+### Correct extracted data
+
+Fix an OCR/registry field without re-running verification:
+
+```ts
+await didit.sessions.updateData(session.session_id, { first_name: "John", last_name: "Doe" });
+await didit.sessions.updatePoaData(session.session_id, { issuer: "Iberdrola" });
+await didit.sessions.updateKybCompanyData(session.session_id, companyUuid, {
+  company_name: "Acme Corporation Limited",
+});
+```
+
+Each of these fires a `data.updated` webhook.
+
+### Generate a PDF report
+
+```ts
+const pdf = await didit.sessions.generatePdf(session.session_id); // Buffer
+await fs.promises.writeFile(`session-${session.session_id}.pdf`, pdf);
+```
+
+Rate-limited to 50 requests/minute per API key; only available once a session reaches an
+eligible status.
+
+## Standalone ID Verification
+
+Already collecting documents through your own UI and just need Didit to check one? Skip the
+hosted session entirely:
+
+```ts
+const result = await didit.idVerification.verify({
+  front_image: fs.readFileSync("front.jpg"), // Buffer, stream, or { data, filename, contentType }
+  back_image: fs.readFileSync("back.jpg"),
+  perform_document_liveness: true,
+});
+
+result.id_verification.status; // "Approved" | "Declined"
+result.id_verification.full_name;
+result.id_verification.warnings; // e.g. DOCUMENT_EXPIRED, MRZ_VALIDATION_FAILED
+```
+
+Rate-limited to 300 requests/minute per API key.
+
+## Webhooks
+
+Didit signs every webhook delivery with up to three headers. `constructEvent` checks whichever
+are present and accepts the payload as soon as **any one** validates against your secret, using
+constant-time comparison, and always rejects requests older than 5 minutes (replay protection).
+
+```ts
+const { event, verifiedWith, isTest } = didit.webhooks.constructEvent(rawBody, headers);
+```
+
+`rawBody` must be the **exact bytes** of the request body, before any JSON parsing —
+re-stringifying a parsed body can reorder keys or reformat numbers and break signature
+verification.
+
+### Express
+
+```ts
+import express from "express";
+import { DiditClient, createRawBodyMiddleware } from "didit-node-client";
+
+const app = express();
+const didit = new DiditClient({ webhookSecret: process.env.DIDIT_WEBHOOK_SECRET });
+
+// Mount ONLY on the webhook route, before express.json() would otherwise consume the stream.
+app.post("/webhooks/didit", createRawBodyMiddleware(), (req, res) => {
+  try {
+    const { event } = didit.webhooks.constructEvent(req.rawBody!, req.headers);
+
+    if (event.webhook_type === "status.updated" && event.status === "Approved") {
+      // event.decision has the full verification result
+    }
+
+    res.status(200).json({ received: true });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+```
+
+Respond within 5 seconds with a `2xx` — queue any heavier work asynchronously. Didit retries
+failed deliveries (non-2xx, timeout) roughly 1 and 4 minutes later, then gives up; retries and
+fan-out to multiple destinations share the same `event_id` for idempotent processing.
+
+### Any other framework
+
+`createRawBodyMiddleware` is an Express convenience. On Fastify, Next.js Route Handlers, Hono,
+etc., get the raw body however that framework provides it and pass it straight through:
+
+```ts
+// Next.js Route Handler
+export async function POST(request: Request) {
+  const rawBody = await request.text();
+  const { event } = didit.webhooks.constructEvent(rawBody, Object.fromEntries(request.headers));
+  // ...
+  return Response.json({ received: true });
+}
+```
+
+### Event types
+
+| `webhook_type`               | Fires when                                              |
+| ---------------------------- | ------------------------------------------------------- |
+| `status.updated`             | A KYC/KYB session's status changes                      |
+| `data.updated`               | Verification data corrected post-creation               |
+| `user.status.updated`        | A user entity's status changes (ACTIVE/FLAGGED/BLOCKED) |
+| `user.data.updated`          | A user entity's profile/metadata changes                |
+| `business.status.updated`    | A business entity's status changes                      |
+| `business.data.updated`      | A business entity's profile/metadata changes            |
+| `transaction.created`        | A monitored transaction is created                      |
+| `transaction.status.updated` | A transaction's status changes                          |
+| `travel_rule.status.updated` | A Travel Rule exchange's status changes                 |
+
+## Error handling
+
+Every error thrown by this SDK extends `DiditError`, so one `catch` block is enough — branch
+further with `instanceof` when you need to:
+
+```ts
+import { DiditAPIError, DiditRateLimitError, DiditError } from "didit-node-client";
+
+try {
+  await didit.sessions.create({ workflow_id: "wf_..." });
+} catch (error) {
+  if (error instanceof DiditRateLimitError) {
+    console.log(`Rate limited, retry after ${error.retryAfter}s`);
+  } else if (error instanceof DiditAPIError) {
+    console.error(error.status, error.body); // structured API error
+  } else if (error instanceof DiditError) {
+    console.error(error.message); // config, validation, connection, or webhook error
+  }
+  throw error;
+}
+```
+
+| Class                        | When                                                            |
+| ---------------------------- | --------------------------------------------------------------- |
+| `DiditConfigurationError`    | Missing/invalid client config (e.g. no API key)                 |
+| `DiditInvalidRequestError`   | Invalid input caught client-side, before any network call       |
+| `DiditConnectionError`       | Network failure, timeout, or aborted request                    |
+| `DiditValidationError`       | `400` — request failed API-side validation                      |
+| `DiditAuthenticationError`   | `401`/`403` — missing/invalid API key or insufficient scope     |
+| `DiditNotFoundError`         | `404` — resource doesn't exist                                  |
+| `DiditRateLimitError`        | `429` — carries `.retryAfter`, `.limit`, `.remaining`, `.reset` |
+| `DiditServerError`           | `5xx` — problem on Didit's side                                 |
+| `DiditWebhookSignatureError` | Webhook signature invalid, stale, or malformed                  |
+
+`DiditAPIError` (the common base of the HTTP ones) also carries `.status`, `.body` (parsed API
+error payload), `.headers`, `.request`, and `.requestId` for support/debugging.
+
+## Retries, timeouts & rate limits
+
+- `GET` requests (retrieve, list, generate PDF) automatically retry on network errors, `429`,
+  and `5xx`, with exponential backoff + jitter, honoring `Retry-After`. Default `maxRetries: 2`.
+- Mutating requests (`POST`/`PATCH`) are **not** retried automatically by default, since some
+  (like `updateStatus`) aren't idempotent — set `{ retry: true }` per call if you know it's safe
+  to repeat.
+- Every method accepts `{ signal, timeoutMs }` for cancellation and per-call timeout overrides:
+
+  ```ts
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 5000);
+  await didit.sessions.retrieve(id, { signal: controller.signal });
+  ```
+
+## TypeScript
+
+Everything is exported — request payloads, response shapes, every decision feature, webhook
+events:
+
+```ts
+import type {
+  Session,
   SessionDecision,
+  CreateSessionRequest,
+  WebhookEvent,
+  SessionWebhookEvent,
+  IdVerificationResult,
+  AmlScreeningResult,
 } from "didit-node-client";
 ```
 
-## Security Best Practices
+## Security best practices
 
-1. Store credentials securely:
+- **Never** expose your API key client-side — call this SDK only from your backend.
+- Always verify webhook signatures (`constructEvent` does this for you) instead of trusting
+  the payload's `session_id`/`status` fields directly.
+- Store `DIDIT_API_KEY` / `DIDIT_WEBHOOK_SECRET` in a secrets manager or environment variables,
+  never in source control.
+- Treat media URLs in decisions (portraits, document scans) as short-lived and sensitive — don't
+  log or cache them beyond what you need.
 
-   - Use environment variables
-   - Never commit secrets to source control
-   - Use secure secret management in production
+## Examples
 
-2. Webhook security:
+Runnable end-to-end scripts live in [`examples/`](./examples), covering hosted sessions,
+webhooks, PDF reports, pagination, standalone verification, and KYB.
 
-   - Always verify webhook signatures
-   - Validate webhook timestamp freshness
-   - Use HTTPS endpoints
+## Contributing
 
-3. General security:
-   - Use HTTPS for callback URLs
-   - Keep dependencies updated
-   - Implement proper error handling
+```bash
+npm install
+npm run build       # tsup -> dist/ (CJS + ESM + types)
+npm test             # jest
+npm run lint         # eslint
+npm run typecheck    # tsc --noEmit
+npm run verify       # everything above, what `prepublishOnly` runs
+```
 
-## Documentation
-
-For detailed API documentation, visit:
-
-- [DiDiT API Documentation](https://docs.didit.me)
-- [API Reference](https://api.didit.me/docs)
+Issues and PRs welcome at the [GitHub repository](https://github.com/awaisjameel/didit-node-client).
 
 ## License
 
-MIT
-
-## Support
-
-For issues and feature requests, please visit our [GitHub repository](https://github.com/awaisjameel/didit-node-client/issues).
+MIT © Awais Jameel

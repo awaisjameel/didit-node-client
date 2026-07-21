@@ -1,62 +1,82 @@
-require('dotenv').config();
-const express = require('express');
-const { DiDiTClient, createRawBodyMiddleware } = require('didit-node-client');
+/**
+ * Minimal Express webhook receiver. Verifies the signature, then branches on webhook_type
+ * and session status. Mount createRawBodyMiddleware() ONLY on the webhook route, before any
+ * body parser that would otherwise consume the request stream.
+ *
+ * Usage: DIDIT_WEBHOOK_SECRET=... node examples/webhook-server.js
+ */
+require("dotenv").config();
+const express = require("express");
+const { DiditClient, createRawBodyMiddleware } = require("didit-node-client");
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-const client = new DiDiTClient({
-    webhookSecret: process.env.DIDIT_WEBHOOK_SECRET,
-    debug: true,
+const didit = new DiditClient({
+  apiKey: process.env.DIDIT_API_KEY,
+  webhookSecret: process.env.DIDIT_WEBHOOK_SECRET,
+  debug: true,
 });
 
-// Add raw body middleware for webhook processing
-app.use('/webhook', createRawBodyMiddleware());
+app.post("/webhooks/didit", createRawBodyMiddleware(), (req, res) => {
+  let verification;
+  try {
+    verification = didit.webhooks.constructEvent(req.rawBody, req.headers);
+  } catch (error) {
+    // Wrong secret, tampered payload, stale timestamp, or malformed body.
+    console.error("Webhook rejected:", error.message);
+    return res.status(400).json({ error: error.message });
+  }
 
-app.post('/webhook', async (req, res) => {
-    try {
-        const webhookData = client.processWebhook(req);
-        console.log('Webhook received:', webhookData);
+  const { event, verifiedWith, isTest } = verification;
+  console.log(`Verified webhook via ${verifiedWith} scheme${isTest ? " (test delivery)" : ""}`);
 
-        switch (webhookData.status) {
-            case 'Approved':
-                // Handle approved verification
-                if (webhookData.decision?.kyc?.status === 'Approved') {
-                    await updateUserVerificationStatus(webhookData.session_id, 'approved');
-                }
-                break;
+  switch (event.webhook_type) {
+    case "status.updated":
+      handleStatusUpdate(event);
+      break;
+    case "data.updated":
+      console.log(`Session ${event.session_id} data corrected post-verification.`);
+      break;
+    case "user.status.updated":
+      console.log(
+        `User ${event.vendor_user_id} status: ${event.previous_status} -> ${event.status}`,
+      );
+      break;
+    case "transaction.created":
+    case "transaction.status.updated":
+      console.log(`Transaction ${event.transaction_id} status: ${event.status}`);
+      break;
+    default:
+      console.log("Unhandled webhook type:", event.webhook_type);
+  }
 
-            case 'Declined':
-                // Handle declined verification
-                await notifyComplianceTeam(webhookData);
-                break;
-
-            case 'In Review':
-                // Handle manual review required
-                await createManualReviewTask(webhookData);
-                break;
-        }
-
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Webhook error:', error);
-        res.status(400).json({ error: error.message });
-    }
+  // Respond fast (< 5s) and do heavier work asynchronously — Didit retries on non-2xx or timeout.
+  res.status(200).json({ received: true });
 });
 
-// Example helper functions
-async function updateUserVerificationStatus(sessionId, status) {
-    console.log(`Updating user verification status: ${sessionId} -> ${status}`);
-}
-
-async function notifyComplianceTeam(webhookData) {
-    console.log('Notifying compliance team about declined verification:', webhookData.session_id);
-}
-
-async function createManualReviewTask(webhookData) {
-    console.log('Creating manual review task for session:', webhookData.session_id);
+function handleStatusUpdate(event) {
+  switch (event.status) {
+    case "Approved":
+      console.log(`Session ${event.session_id} approved.`, {
+        vendorData: event.vendor_data,
+        fullName: event.decision?.id_verifications?.[0]?.full_name,
+      });
+      break;
+    case "Declined":
+      console.log(`Session ${event.session_id} declined — route to compliance review.`);
+      break;
+    case "In Review":
+      console.log(`Session ${event.session_id} needs manual review.`);
+      break;
+    case "Resubmitted":
+      console.log(`Session ${event.session_id} resubmission requested:`, event.resubmit_info);
+      break;
+    default:
+      console.log(`Session ${event.session_id} status: ${event.status}`);
+  }
 }
 
 app.listen(port, () => {
-    console.log(`Webhook server listening at http://localhost:${port}`);
+  console.log(`Webhook server listening at http://localhost:${port}/webhooks/didit`);
 });
