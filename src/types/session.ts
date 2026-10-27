@@ -76,7 +76,7 @@ export interface CreateSessionRequest {
 
 export interface Session {
   session_id: string;
-  session_kind: SessionKind;
+  session_kind?: SessionKind;
   session_number: number;
   /** Short-lived token embedded in `url`; not a bearer credential for the API itself. */
   session_token: string;
@@ -94,7 +94,7 @@ export interface Session {
 export interface ListSessionsParams {
   /** `"user"` (KYC only, default), `"business"` (KYB only), or `"all"`. */
   session_kind?: SessionKind | "all";
-  /** Max rows per page. Default 50, max 100. */
+  /** Positive rows per page, per kind when session_kind is all. Default 50. */
   limit?: number;
   /** Rows to skip for pagination. Default 0. */
   offset?: number;
@@ -153,13 +153,15 @@ export interface UpdateSessionStatusRequest {
   new_status: UpdateStatusValue;
   /** Free-text reason, stored in the session's audit trail. */
   comment?: string;
-  /** Required when `new_status` is `"Resubmitted"`. Omit to let Didit auto-select resubmittable steps. */
+  /** Omit to let Didit auto-select existing resubmittable attempts. */
   nodes_to_resubmit?: NodeResubmission[];
   /** Notify the end user of the status change by email. Default `false`. */
   send_email?: boolean;
   /** Required when `send_email` is `true`. */
   email_address?: string;
   email_language?: LanguageCode;
+  /** Token returned by the matching decision/resubmission email preview. */
+  email_preview_token?: string;
 }
 
 export interface UpdateSessionStatusResponse {

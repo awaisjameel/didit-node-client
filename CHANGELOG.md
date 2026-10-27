@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file. Format loosely 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/).
 
+## 3.0.0 - 2026-10-26
+
+### Changed
+
+- Support maintained Node 22/24/26 only; update runtime and development dependencies.
+- Require full-payload webhook signatures, binding replay protection to signed timestamps; remove Simple acceptance.
+- Migrate to TypeScript 7, type-aware Oxlint, SWC/Jest 30, and tsdown with isolated declarations and distinct CJS/ESM type exports.
+- Align nullable response fields, resubmission objects and transaction amounts with current Didit contracts; improve webhook type narrowing and current event families.
+- Use Node's native abort-signal composition; remove obsolete tooling and esbuild override.
+
+### Fixed
+
+- Preserve numeric and Unicode object key ordering and own `__proto__` values in canonical signatures; support previous-secret signature headers.
+- Reject malformed timestamp headers, ambiguous duplicates, invalid UTF-8 and invalid verification options.
+- Prevent redirect credential forwarding and reject malformed successful JSON/PDF responses.
+- Reject invalid per-request timeouts before transport or retries; lint executable scripts and examples alongside the typed source.
+- Preserve typed cancellation during backoff; reject invalid body-size limits and avoid duplicate middleware completion after errors.
+- Fully paginate mixed KYC/KYB sessions despite capped KYB counts and KYC-only merged next links.
+- Keep deeply nested/cyclic data redacted in diagnostic logging.
+- Update examples and migration instructions; clear vulnerable transitive dependencies.
+
 ## 2.0.0
 
 Complete rewrite against Didit's current **v3** Verification API. Didit's own platform moved

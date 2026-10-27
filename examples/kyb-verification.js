@@ -4,7 +4,6 @@
  *
  * Usage: DIDIT_KYB_WORKFLOW_ID=... node examples/kyb-verification.js
  */
-require("dotenv").config();
 const { DiditClient } = require("didit-node-client");
 
 async function main() {

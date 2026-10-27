@@ -23,6 +23,21 @@ function fakeResponse() {
 }
 
 describe("createRawBodyMiddleware", () => {
+  it.each([NaN, Infinity, 0, -1, 1.5])("rejects invalid byte limit %s", (maxBytes) => {
+    expect(() => createRawBodyMiddleware({ maxBytes })).toThrow(/maxBytes/);
+  });
+
+  it("forwards a stream failure once and never resumes processing", () => {
+    const req = fakeRequest();
+    const next = jest.fn();
+    createRawBodyMiddleware()(req as never, fakeResponse() as never, next);
+    const error = new Error("stream failed");
+    req.emit("error", error);
+    req.emit("end");
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledWith(error);
+    expect(req.rawBody).toBeUndefined();
+  });
   it("concatenates chunks into an exact Buffer without corrupting multi-byte UTF-8 split across chunks", () => {
     const payload = JSON.stringify({ name: "José 日本語 emoji: 🎉" });
     const fullBuffer = Buffer.from(payload, "utf8");

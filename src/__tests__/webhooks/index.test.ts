@@ -19,7 +19,11 @@ describe("WebhooksResource", () => {
   it("uses the client's configured webhookSecret by default", () => {
     const secret = "whsec_from_client";
     const resource = new WebhooksResource(config({ webhookSecret: secret }));
-    const body = JSON.stringify({ session_id: "s_1", status: "Approved" });
+    const body = JSON.stringify({
+      timestamp: Math.floor(Date.now() / 1000),
+      session_id: "s_1",
+      status: "Approved",
+    });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = crypto.createHmac("sha256", secret).update(body, "utf8").digest("hex");
 
@@ -32,7 +36,7 @@ describe("WebhooksResource", () => {
 
   it("throws DiditConfigurationError when the client has no webhookSecret configured", () => {
     const resource = new WebhooksResource(config());
-    const body = JSON.stringify({ session_id: "s_1" });
+    const body = JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), session_id: "s_1" });
     expect(() =>
       resource.constructEvent(body, {
         "x-signature": "x",
@@ -44,7 +48,7 @@ describe("WebhooksResource", () => {
   it("allows overriding the secret per call", () => {
     const resource = new WebhooksResource(config({ webhookSecret: "wrong-secret" }));
     const secret = "override-secret";
-    const body = JSON.stringify({ session_id: "s_1" });
+    const body = JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), session_id: "s_1" });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = crypto.createHmac("sha256", secret).update(body, "utf8").digest("hex");
 

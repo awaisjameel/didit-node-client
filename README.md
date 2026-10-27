@@ -24,8 +24,7 @@ const session = await didit.sessions.create({
 res.redirect(session.url);
 ```
 
-> **Upgrading from 1.x?** Didit's API moved from v1 (OAuth2 `client_id`/`client_secret`) to v3
-> (a single `x-api-key`). This is a breaking major release — see [MIGRATION.md](./MIGRATION.md).
+> **Upgrading?** Version 3 requires maintained Node 22/24/26 and full-payload webhook signatures. See [MIGRATION.md](./MIGRATION.md) for the 2.x and 1.x migration paths.
 
 ---
 
@@ -60,7 +59,7 @@ res.redirect(session.url);
 - 🔑 **v3-native** — built against Didit's current `x-api-key` + `workflow_id` API, KYC and KYB alike.
 - 🧩 **Full session lifecycle** — create, retrieve, list (with auto-pagination), approve/decline/resubmit, correct OCR/registry data, and render PDF reports.
 - 🪪 **Standalone ID verification** — one-shot document checks without spinning up a hosted session.
-- 🔐 **Robust webhooks** — verifies all three signature schemes Didit sends (`X-Signature-V2`, `X-Signature`, `X-Signature-Simple`), accepting the payload if _any_ validates, with replay protection via timestamp freshness checks.
+- 🔐 **Robust webhooks** — authenticates the complete payload using canonical V2 or raw-body signatures, including signing-secret rotation, with freshness bound to signed timestamps.
 - 🔁 **Automatic retries** — exponential backoff with jitter on network errors, `429`, and `5xx`, honoring `Retry-After`. Safe by default (only idempotent `GET`s retry automatically).
 - 🎯 **End-to-end TypeScript** — every request and response is fully typed, including the full decision schema (`id_verifications`, `aml_screenings`, `face_matches`, `liveness_checks`, KYB `registry_checks`, ...).
 - 📦 **Dual CJS/ESM** — works with `require()` and `import` out of the box, tree-shakeable.
@@ -74,7 +73,7 @@ res.redirect(session.url);
 npm install didit-node-client
 ```
 
-Requires Node.js **18+**. `express` is an optional peer dependency, needed only if you use
+Supports maintained Node.js **22, 24 and 26** (minimum 22.18.0 or 24.11.0 for those lines). `express` is an optional peer dependency, needed only if you use
 [`createRawBodyMiddleware`](#express).
 
 ## Getting your credentials
@@ -157,11 +156,11 @@ decision.aml_screenings?.[0]?.hits;
 decision.face_matches?.[0]?.score;
 ```
 
-Every feature result (`id_verifications`, `nfc_verifications`, `liveness_checks`,
+Feature results can be omitted or null until they run. Every feature result (`id_verifications`, `nfc_verifications`, `liveness_checks`,
 `face_matches`, `aml_screenings`, `poa_verifications`, `phone_verifications`,
 `email_verifications`, `ip_analyses`, `database_validations`, and the KYB-only
 `registry_checks` / `document_verifications` / `key_people_checks`) is an array, `undefined`
-until that feature runs. Media URLs (images/video) are **short-lived presigned links** — use
+or null until that feature runs. Media URLs (images/video) are **short-lived presigned links** — use
 them promptly, or call `retrieve()` again for fresh ones.
 
 ### List & paginate sessions
@@ -177,7 +176,7 @@ for await (const session of didit.sessions.listAll({ workflow_id: "wf_..." })) {
 ```
 
 Array filters (`status`, `workflow_id`, `country`, `document_type`) are automatically joined
-into the comma-separated form the API expects.
+into the comma-separated form the API expects. `listAll({ session_kind: "all" })` yields KYC sessions first, then KYB sessions, paginating each independently so capped KYB counts cannot truncate results.
 
 ### Update status (approve / decline / resubmit)
 
@@ -245,17 +244,14 @@ Rate-limited to 300 requests/minute per API key.
 
 ## Webhooks
 
-Didit signs every webhook delivery with up to three headers. `constructEvent` checks whichever
-are present and accepts the payload as soon as **any one** validates against your secret, using
-constant-time comparison, and always rejects requests older than 5 minutes (replay protection).
+`constructEvent` accepts full-payload `X-Signature-V2` and `X-Signature` signatures only, including their `-Previous` variants during secret rotation. Simple-only signatures are rejected. The signed body must contain a fresh `timestamp` (or a legacy signed `created_at`); an optional `X-Timestamp` must match it. Default clock tolerance is 300 seconds. `isTest` is an unsigned informational hint and must never bypass authorization.
 
 ```ts
 const { event, verifiedWith, isTest } = didit.webhooks.constructEvent(rawBody, headers);
 ```
 
 `rawBody` must be the **exact bytes** of the request body, before any JSON parsing —
-re-stringifying a parsed body can reorder keys or reformat numbers and break signature
-verification.
+re-stringifying a parsed body can break raw-body verification. Canonical V2 verification tolerates object key ordering and whitespace changes.
 
 ### Express
 
@@ -277,7 +273,7 @@ app.post("/webhooks/didit", createRawBodyMiddleware(), (req, res) => {
 
     res.status(200).json({ received: true });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
+    res.status(401).json({ error: "Invalid webhook" });
   }
 });
 ```
@@ -356,9 +352,7 @@ error payload), `.headers`, `.request`, and `.requestId` for support/debugging.
 
 - `GET` requests (retrieve, list, generate PDF) automatically retry on network errors, `429`,
   and `5xx`, with exponential backoff + jitter, honoring `Retry-After`. Default `maxRetries: 2`.
-- Mutating requests (`POST`/`PATCH`) are **not** retried automatically by default, since some
-  (like `updateStatus`) aren't idempotent — set `{ retry: true }` per call if you know it's safe
-  to repeat.
+- Mutating requests (`POST`/`PATCH`) are not retried automatically. Cancellation remains a typed `DiditConnectionError`, including cancellation during backoff.
 - Every method accepts `{ signal, timeoutMs }` for cancellation and per-call timeout overrides:
 
   ```ts
@@ -403,9 +397,9 @@ webhooks, PDF reports, pagination, standalone verification, and KYB.
 
 ```bash
 npm install
-npm run build       # tsup -> dist/ (CJS + ESM + types)
+npm run build        # tsdown -> dist/ (CJS + ESM + types)
 npm test             # jest
-npm run lint         # eslint
+npm run lint         # Oxlint with TypeScript 7 type-aware rules
 npm run typecheck    # tsc --noEmit
 npm run verify       # everything above, what `prepublishOnly` runs
 ```

@@ -1,3 +1,16 @@
+# Migrating from 2.x to 3.0
+
+- Use maintained Node 22, 24 or 26. Minimum supported patches are 22.18.0 and 24.11.0; development uses the latest patch on each line.
+- Webhooks must carry a full-payload V2 or raw-body signature. Deprecated Simple-only signatures no longer authenticate events; `verifiedWith` is now `"v2" | "raw"`.
+- Freshness comes from the signed body timestamp. A supplied `X-Timestamp` must match it; refreshing only the header cannot replay an expired body. Legacy signed Unix/ISO `created_at` remains supported.
+- `X-Signature-V2-Previous` and `X-Signature-Previous` support Didit's destination-secret rotation window. The unsigned `isTest` hint never changes authentication requirements.
+- Webhook events narrow by `webhook_type`; `resubmit_info` is an object with `nodes_to_resubmit` and `reasons`. Transaction amounts are decimal strings. Decision arrays and several decision fields may be null; `session_kind` is optional on create responses.
+- `listAll({ session_kind: "all" })` paginates KYC and KYB independently. It yields all KYC records before KYB records. Page limits and offsets must be safe integers within their documented ranges.
+- HTTP redirects and malformed successful JSON/PDF responses raise package errors. Cancellation during retries remains `DiditConnectionError`.
+- Contributors: TypeScript 7 replaces TypeScript 5; SWC replaces ts-jest, Oxlint plus tsgolint replaces ESLint, and tsdown replaces tsup. `npm run verify` includes type-aware linting, formatting, tests, declaration generation, and CJS/ESM builds. The public runtime entry points remain unchanged.
+
+---
+
 # Migrating from 1.x to 2.0
 
 Didit's API itself changed from **v1** (what 1.x wrapped) to **v3** — a different auth model,

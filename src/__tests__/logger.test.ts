@@ -13,9 +13,20 @@ describe("redact", () => {
   });
 
   it("redacts nested objects and arrays", () => {
-    const result = redact({ nested: { webhookSecret: "s" }, list: [{ apiKey: "a" }] }) as any;
-    expect(result.nested.webhookSecret).toBe("[REDACTED]");
-    expect(result.list[0].apiKey).toBe("[REDACTED]");
+    expect(redact({ nested: { webhookSecret: "s" }, list: [{ apiKey: "a" }] })).toEqual({
+      nested: { webhookSecret: "[REDACTED]" },
+      list: [{ apiKey: "[REDACTED]" }],
+    });
+  });
+
+  it("redacts over-depth and cyclic objects instead of returning unfiltered data", () => {
+    const nested = Array.from({ length: 10 }).reduce<unknown>((value) => ({ nested: value }), {
+      apiKey: "deep-secret",
+    });
+    expect(JSON.stringify(redact(nested))).not.toContain("deep-secret");
+    const cyclic: Record<string, unknown> = { apiKey: "cyclic-secret" };
+    cyclic.self = cyclic;
+    expect(JSON.stringify(redact(cyclic))).not.toContain("cyclic-secret");
   });
 
   it("passes through primitives untouched", () => {

@@ -3,25 +3,21 @@
  * are sorted recursively (arrays keep their order) and non-ASCII characters are left
  * unescaped, matching `JSON.stringify`'s default behavior in Node.
  *
- * Didit's own reference implementation additionally runs a `shortenFloats` normalization
- * step before serializing, whose exact rounding rules aren't published. This function does
- * not attempt to replicate it, so V2 verification is best-effort: {@link verifyWebhookSignature}
- * always also checks the raw-body (`X-Signature`) and envelope (`X-Signature-Simple`) schemes
- * when their headers are present, and accepts the payload if *any* scheme validates — so an
- * imperfect V2 match never causes a false rejection as long as another header is available.
+ * Serialize entries directly: JSON.stringify(object) reorders numeric keys, and
+ * copying into an ordinary object can discard an own __proto__ key. JavaScript
+ * already serializes whole-valued numbers as integers, matching shorten_floats.
  * @internal
  */
 export function canonicalJsonStringify(value: unknown): string {
-  return JSON.stringify(sortKeysDeep(value));
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value === null || typeof value !== "object") return value;
-
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonStringify).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    );
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJsonStringify(record[key])}`).join(",")}}`;
   }
-  return sorted;
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new TypeError("Expected a JSON value.");
+  return encoded;
 }

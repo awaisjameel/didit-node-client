@@ -1,197 +1,134 @@
 import crypto from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { DiditConfigurationError, DiditWebhookSignatureError } from "../errors";
 import { canonicalJsonStringify } from "../internal/canonical-json";
-import type {
-  WebhookEvent,
-  WebhookHeaders,
-  WebhookSignatureScheme,
-  WebhookVerificationResult,
-} from "../types/webhook";
+import type { WebhookEvent, WebhookHeaders, WebhookVerificationResult } from "../types/webhook";
 
 export interface VerifyWebhookOptions {
-  /** Overrides the client's configured `webhookSecret` for this call. */
+  /** Overrides the client's configured webhook secret for this call. */
   secret?: string;
-  /** Max allowed clock skew, in seconds, between now and `X-Timestamp`. Default `300`. */
+  /** Max clock skew from the signed body timestamp, in seconds. Default 300. */
   toleranceSeconds?: number;
-  /** Injectable clock for testing. Defaults to `Date.now`. @internal */
+  /** Injectable clock in milliseconds. @internal */
   now?: () => number;
 }
 
-const DEFAULT_TOLERANCE_SECONDS = 300;
-
 /**
- * Verifies and parses an inbound Didit webhook delivery.
- *
- * Didit signs every delivery with up to three headers (`X-Signature-V2`, `X-Signature`,
- * `X-Signature-Simple`); this checks whichever of them are present and accepts the payload
- * as soon as *any one* validates against your webhook secret with constant-time comparison.
- * Requests older than `toleranceSeconds` (default 5 minutes) are always rejected, even if
- * the signature is otherwise valid, to mitigate replay attacks.
- *
- * @param rawBody The exact bytes/string of the request body, **before** any JSON parsing —
- *   re-stringifying a parsed body can change whitespace/key order and break the raw-body and
- *   V2 signature checks. Use {@link createRawBodyMiddleware} (Express) or read the stream
- *   yourself to obtain this.
- * @throws {DiditWebhookSignatureError} if no signature header validates, the timestamp is
- *   missing/stale, or the body isn't valid JSON.
- * @throws {DiditConfigurationError} if no webhook secret was configured.
+ * Authenticate the complete payload with V2 canonical JSON or exact raw bytes.
+ * Simple signatures are never accepted. Freshness must come from signed data;
+ * an optional X-Timestamp header must agree with it. Previous-secret headers
+ * support Didit's signing-secret rotation window.
  */
 export function verifyWebhookSignature(
   rawBody: string | Buffer,
   headers: WebhookHeaders,
   options: VerifyWebhookOptions = {},
 ): WebhookVerificationResult {
-  const secret = options.secret ?? getConfiguredSecret();
+  const secret = options.secret ?? process.env.DIDIT_WEBHOOK_SECRET;
   if (!secret) {
+    throw new DiditConfigurationError("A webhook secret is required to verify signatures.");
+  }
+  const tolerance = options.toleranceSeconds ?? 300;
+  const now = Math.floor((options.now ?? Date.now)() / 1000);
+  if (!Number.isFinite(tolerance) || tolerance < 0 || !Number.isFinite(now)) {
     throw new DiditConfigurationError(
-      "A webhook secret is required to verify signatures. Pass `webhookSecret` to " +
-        "`new DiditClient({ webhookSecret })`, set DIDIT_WEBHOOK_SECRET, or pass `{ secret }` " +
-        "to this call directly.",
+      "Webhook tolerance must be finite and non-negative, and the clock must be finite.",
     );
   }
-
-  const timestamp = getHeader(headers, "x-timestamp");
-  if (!timestamp) {
-    throw new DiditWebhookSignatureError("Missing required `X-Timestamp` header.");
-  }
-  assertFreshTimestamp(
-    timestamp,
-    options.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS,
-    options.now ?? Date.now,
-  );
-
-  const bodyBuffer = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody, "utf8");
-  const bodyString = bodyBuffer.toString("utf8");
-
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody, "utf8");
+  if (!isUtf8(body)) throw new DiditWebhookSignatureError("Webhook body is not valid UTF-8.");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(bodyString);
+    parsed = JSON.parse(body.toString("utf8"));
   } catch {
     throw new DiditWebhookSignatureError("Webhook body is not valid JSON.");
   }
-  if (!isRecord(parsed)) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new DiditWebhookSignatureError("Webhook body must be a JSON object.");
   }
-
-  const signatureV2 = getHeader(headers, "x-signature-v2");
-  const signatureRaw = getHeader(headers, "x-signature");
-  const signatureSimple = getHeader(headers, "x-signature-simple");
-
-  if (!signatureV2 && !signatureRaw && !signatureSimple) {
+  const payload = parsed as Record<string, unknown>;
+  const timestamp = Object.hasOwn(payload, "timestamp")
+    ? unixTimestamp(payload.timestamp)
+    : legacyTimestamp(payload.created_at);
+  if (timestamp === undefined || Math.abs(now - timestamp) > tolerance) {
+    throw new DiditWebhookSignatureError("Signed webhook timestamp is stale or invalid.");
+  }
+  const headerTimestamp = getHeader(headers, "x-timestamp");
+  if (headerTimestamp !== undefined && unixTimestamp(headerTimestamp) !== timestamp) {
     throw new DiditWebhookSignatureError(
-      "No signature header found (expected one of X-Signature-V2, X-Signature, X-Signature-Simple).",
+      "X-Timestamp does not match the signed payload timestamp.",
     );
   }
-
-  const verifiedWith = tryVerify({
-    secret,
-    signatureV2,
-    signatureRaw,
-    signatureSimple,
-    bodyString,
-    parsed,
-    timestamp,
-  });
-
-  if (!verifiedWith) {
+  const v2 = [getHeader(headers, "x-signature-v2"), getHeader(headers, "x-signature-v2-previous")];
+  const raw = [getHeader(headers, "x-signature"), getHeader(headers, "x-signature-previous")];
+  if (![...v2, ...raw].some(Boolean)) {
     throw new DiditWebhookSignatureError(
-      "Webhook signature verification failed for all provided schemes.",
+      "No signature header found; a full-payload V2 or raw signature is required.",
     );
   }
-
+  let canonical: string;
+  try {
+    canonical = canonicalJsonStringify(payload);
+  } catch {
+    throw new DiditWebhookSignatureError("Webhook body cannot be canonicalized.");
+  }
+  const verifiedWith = matches(secret, canonical, v2)
+    ? "v2"
+    : matches(secret, body, raw)
+      ? "raw"
+      : undefined;
+  if (!verifiedWith)
+    throw new DiditWebhookSignatureError("Webhook full-payload signature verification failed.");
   return {
-    event: parsed as WebhookEvent,
+    event: payload as WebhookEvent,
     verifiedWith,
     isTest: getHeader(headers, "x-didit-test-webhook") === "true",
   };
 }
 
-function tryVerify(input: {
-  secret: string;
-  signatureV2?: string;
-  signatureRaw?: string;
-  signatureSimple?: string;
-  bodyString: string;
-  parsed: Record<string, unknown>;
-  timestamp: string;
-}): WebhookSignatureScheme | undefined {
-  const { secret, signatureV2, signatureRaw, signatureSimple, bodyString, parsed, timestamp } =
-    input;
+function matches(
+  secret: string,
+  body: string | Buffer,
+  signatures: Array<string | undefined>,
+): boolean {
+  const expected = crypto.createHmac("sha256", secret).update(body).digest();
+  return signatures.some(
+    (signature) =>
+      signature !== undefined &&
+      /^[a-f0-9]{64}$/i.test(signature) &&
+      crypto.timingSafeEqual(expected, Buffer.from(signature, "hex")),
+  );
+}
 
+function unixTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !/^[0-9]+$/.test(value)))
+    return undefined;
+  const timestamp = Number(value);
+  return Number.isSafeInteger(timestamp) ? timestamp : undefined;
+}
+
+function legacyTimestamp(value: unknown): number | undefined {
+  const unix = unixTimestamp(value);
+  if (unix !== undefined) return unix;
   if (
-    signatureV2 &&
-    constantTimeEqual(hmacHex(secret, canonicalJsonStringify(parsed)), signatureV2)
-  ) {
-    return "v2";
-  }
-  if (signatureRaw && constantTimeEqual(hmacHex(secret, bodyString), signatureRaw)) {
-    return "raw";
-  }
-  if (signatureSimple) {
-    const id = firstDefinedString(parsed, [
-      "session_id",
-      "business_session_id",
-      "transaction_id",
-      "vendor_user_id",
-      "vendor_business_id",
-    ]);
-    const status = typeof parsed.status === "string" ? parsed.status : "";
-    const webhookType = typeof parsed.webhook_type === "string" ? parsed.webhook_type : "";
-    const envelope = `${timestamp}:${id ?? ""}:${status}:${webhookType}`;
-    if (constantTimeEqual(hmacHex(secret, envelope), signatureSimple)) return "simple";
-  }
-
-  return undefined;
-}
-
-function firstDefinedString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string") return value;
-  }
-  return undefined;
-}
-
-function assertFreshTimestamp(
-  timestampHeader: string,
-  toleranceSeconds: number,
-  now: () => number,
-): void {
-  const incoming = Number.parseInt(timestampHeader, 10);
-  if (!Number.isFinite(incoming)) {
-    throw new DiditWebhookSignatureError(`Invalid \`X-Timestamp\` header: "${timestampHeader}".`);
-  }
-  const currentSeconds = Math.floor(now() / 1000);
-  if (Math.abs(currentSeconds - incoming) > toleranceSeconds) {
-    throw new DiditWebhookSignatureError(
-      `Webhook timestamp is stale (received ${incoming}, now ${currentSeconds}, tolerance ${toleranceSeconds}s). ` +
-        "This guards against replay attacks; if you're testing with a stored payload, pass a larger `toleranceSeconds`.",
-    );
-  }
-}
-
-function hmacHex(secret: string, payload: string): string {
-  return crypto.createHmac("sha256", secret).update(payload, "utf8").digest("hex");
-}
-
-function constantTimeEqual(expectedHex: string, providedHex: string): boolean {
-  const expected = Buffer.from(expectedHex, "utf8");
-  const provided = Buffer.from(providedHex, "utf8");
-  if (expected.length !== provided.length) return false;
-  return crypto.timingSafeEqual(expected, provided);
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+  )
+    return undefined;
+  const timestamp = Date.parse(value) / 1000;
+  return Number.isFinite(timestamp) ? Math.floor(timestamp) : undefined;
 }
 
 function getHeader(headers: WebhookHeaders, name: string): string | undefined {
-  for (const [headerName, value] of Object.entries(headers)) {
-    if (headerName.toLowerCase() === name) return Array.isArray(value) ? value[0] : value;
+  let result: string | undefined;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== name || value === undefined) continue;
+    if (Array.isArray(value) && value.length !== 1)
+      throw new DiditWebhookSignatureError(`Ambiguous webhook header: ${name}.`);
+    const text = Array.isArray(value) ? value[0] : value;
+    if (result !== undefined && result !== text)
+      throw new DiditWebhookSignatureError(`Ambiguous webhook header: ${name}.`);
+    result = text;
   }
-  return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function getConfiguredSecret(): string | undefined {
-  return process.env.DIDIT_WEBHOOK_SECRET;
+  return result;
 }

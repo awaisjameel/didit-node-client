@@ -1,4 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
+import { DiditConfigurationError } from "../errors";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -34,6 +35,9 @@ const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
  */
 export function createRawBodyMiddleware(options: RawBodyMiddlewareOptions = {}): RequestHandler {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new DiditConfigurationError("`maxBytes` must be a positive safe integer.");
+  }
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const chunks: Buffer[] = [];
@@ -46,6 +50,7 @@ export function createRawBodyMiddleware(options: RawBodyMiddlewareOptions = {}):
       receivedBytes += chunk.length;
       if (receivedBytes > maxBytes) {
         rejected = true;
+        chunks.length = 0;
         res.status(413).json({ error: `Webhook body exceeds ${maxBytes} byte limit.` });
         return;
       }
@@ -54,12 +59,15 @@ export function createRawBodyMiddleware(options: RawBodyMiddlewareOptions = {}):
 
     req.on("end", () => {
       if (rejected) return;
+      rejected = true;
       req.rawBody = Buffer.concat(chunks);
       next();
     });
 
     req.on("error", (err: Error) => {
       if (rejected) return;
+      rejected = true;
+      chunks.length = 0;
       next(err);
     });
   };

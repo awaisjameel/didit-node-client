@@ -5,7 +5,6 @@
  *
  * Usage: node examples/standalone-id-verification.js <path-to-front-image> [path-to-back-image]
  */
-require("dotenv").config();
 const fs = require("fs");
 const { DiditClient } = require("didit-node-client");
 

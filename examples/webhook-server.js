@@ -5,7 +5,6 @@
  *
  * Usage: DIDIT_WEBHOOK_SECRET=... node examples/webhook-server.js
  */
-require("dotenv").config();
 const express = require("express");
 const { DiditClient, createRawBodyMiddleware } = require("didit-node-client");
 

@@ -4,7 +4,9 @@ import type FormData from "form-data";
 import type { ResolvedConfig } from "../config";
 import {
   createAPIError,
+  DiditAPIError,
   DiditConnectionError,
+  DiditInvalidRequestError,
   DiditRateLimitError,
   DiditServerError,
 } from "../errors";
@@ -55,10 +57,19 @@ export class HttpClient {
       baseURL: config.baseUrl,
       timeout: config.timeout,
       validateStatus: () => true,
+      maxRedirects: 0,
     });
   }
 
   async request<T>(options: RequestOptions): Promise<HttpResponse<T>> {
+    if (
+      options.timeout !== undefined &&
+      (!Number.isFinite(options.timeout) || options.timeout <= 0)
+    ) {
+      throw new DiditInvalidRequestError(
+        "Request timeout must be a positive number of milliseconds.",
+      );
+    }
     const maxRetries = options.maxRetries ?? this.config.maxRetries;
     const retryAllowed = options.retry ?? (options.method === "GET" || options.method === "HEAD");
 
@@ -68,7 +79,8 @@ export class HttpClient {
       try {
         return await this.attempt<T>(options);
       } catch (error) {
-        const canRetry = retryAllowed && attempt < maxRetries && isRetryable(error);
+        const canRetry =
+          !options.signal?.aborted && retryAllowed && attempt < maxRetries && isRetryable(error);
         if (!canRetry) throw error;
 
         const retryAfter =
@@ -81,7 +93,14 @@ export class HttpClient {
           maxRetries,
           delayMs: delay,
         });
-        await sleep(delay, options.signal);
+        try {
+          await sleep(delay, options.signal);
+        } catch (cause) {
+          throw new DiditConnectionError(
+            `Didit request aborted: ${options.method} ${options.path}`,
+            { cause },
+          );
+        }
         attempt += 1;
       }
     }
@@ -126,6 +145,24 @@ export class HttpClient {
     const headers = normalizeHeaders(response.headers as Record<string, unknown>);
 
     if (response.status >= 200 && response.status < 300) {
+      const binary = options.responseType === "arraybuffer" ? toBuffer(response.data) : undefined;
+      const valid =
+        options.responseType === "arraybuffer"
+          ? binary?.subarray(0, 4).toString("ascii") === "%PDF"
+          : typeof response.data === "object" &&
+            response.data !== null &&
+            !Array.isArray(response.data);
+      if (!valid) {
+        throw new DiditAPIError(
+          `Didit returned an invalid ${options.responseType === "arraybuffer" ? "PDF document" : "JSON object"}: ${requestLabel}`,
+          {
+            status: response.status,
+            request: requestLabel,
+            body: response.data,
+            headers,
+          },
+        );
+      }
       this.logger.debug("Response", {
         method: options.method,
         path: options.path,
@@ -196,13 +233,20 @@ function buildAPIError(
 }
 
 function decodeArrayBufferBody(data: unknown): unknown {
-  if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) return data;
+  const bytes = toBuffer(data);
+  if (!bytes) return data;
   try {
-    const text = Buffer.from(data as ArrayBuffer).toString("utf8");
+    const text = bytes.toString("utf8");
     return JSON.parse(text) as unknown;
   } catch {
     return undefined;
   }
+}
+
+function toBuffer(data: unknown): Buffer | undefined {
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return undefined;
 }
 
 function extractErrorMessage(body: unknown): string | undefined {
@@ -241,7 +285,21 @@ function normalizeHeaders(headers: Record<string, unknown>): Record<string, stri
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers ?? {})) {
     if (value === undefined || value === null) continue;
-    result[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : String(value);
+    if (Array.isArray(value)) {
+      result[key.toLowerCase()] = value
+        .map((entry: unknown) =>
+          typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean"
+            ? String(entry)
+            : "",
+        )
+        .join(", ");
+    } else if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      result[key.toLowerCase()] = String(value);
+    }
   }
   return result;
 }

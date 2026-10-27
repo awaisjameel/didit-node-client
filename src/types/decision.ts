@@ -239,11 +239,11 @@ export interface KeyPersonCheckResult extends DecisionItemBase {
 export interface SessionDecision {
   session_id: string;
   session_kind: SessionKind;
-  session_number: number;
-  session_url: string;
+  session_number: number | null;
+  session_url: string | null;
   status: SessionStatus;
   environment: Environment;
-  workflow_id: string;
+  workflow_id: string | null;
   workflow_version?: number;
   /** Feature identifiers that actually executed for this session. */
   features?: DecisionFeature[];
@@ -253,25 +253,25 @@ export interface SessionDecision {
   contact_details?: ContactDetails | null;
   callback?: string | null;
 
-  id_verifications?: IdVerificationResult[];
-  nfc_verifications?: NfcVerificationResult[];
-  liveness_checks?: LivenessCheckResult[];
-  face_matches?: FaceMatchResult[];
-  phone_verifications?: PhoneVerificationResult[];
-  email_verifications?: EmailVerificationResult[];
-  poa_verifications?: PoaVerificationResult[];
-  aml_screenings?: AmlScreeningResult[];
-  ip_analyses?: IpAnalysisResult[];
-  database_validations?: DatabaseValidationResult[];
-  document_ai_documents?: DocumentAiDocumentResult[];
-  questionnaire_responses?: QuestionnaireResponse[];
+  id_verifications?: IdVerificationResult[] | null;
+  nfc_verifications?: NfcVerificationResult[] | null;
+  liveness_checks?: LivenessCheckResult[] | null;
+  face_matches?: FaceMatchResult[] | null;
+  phone_verifications?: PhoneVerificationResult[] | null;
+  email_verifications?: EmailVerificationResult[] | null;
+  poa_verifications?: PoaVerificationResult[] | null;
+  aml_screenings?: AmlScreeningResult[] | null;
+  ip_analyses?: IpAnalysisResult[] | null;
+  database_validations?: DatabaseValidationResult[] | null;
+  document_ai_documents?: DocumentAiDocumentResult[] | null;
+  questionnaire_responses?: QuestionnaireResponse[] | null;
 
   /** KYB only. */
-  registry_checks?: RegistryCheckResult[];
+  registry_checks?: RegistryCheckResult[] | null;
   /** KYB only. */
-  document_verifications?: BusinessDocumentVerificationResult[];
+  document_verifications?: BusinessDocumentVerificationResult[] | null;
   /** KYB only. */
-  key_people_checks?: KeyPersonCheckResult[];
+  key_people_checks?: KeyPersonCheckResult[] | null;
 
   warnings?: Warning[];
   reviews?: Review[];

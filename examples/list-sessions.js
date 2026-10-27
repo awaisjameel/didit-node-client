@@ -4,7 +4,6 @@
  *
  * Usage: node examples/list-sessions.js
  */
-require("dotenv").config();
 const { DiditClient } = require("didit-node-client");
 
 async function main() {

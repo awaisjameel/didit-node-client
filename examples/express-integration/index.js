@@ -4,7 +4,6 @@
  *
  * Usage: DIDIT_API_KEY=... DIDIT_WEBHOOK_SECRET=... node examples/express-integration/index.js
  */
-require("dotenv").config();
 const express = require("express");
 const { DiditClient, createRawBodyMiddleware } = require("didit-node-client");
 
