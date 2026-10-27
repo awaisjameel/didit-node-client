@@ -52,6 +52,19 @@ describe("resolveConfig", () => {
     );
   });
 
+  it.each([
+    "ftp://example.com",
+    "https://user:secret@example.com",
+    "https://example.com/?key=secret",
+    "https://example.com/#fragment",
+  ])("rejects unsafe base URL %s", (baseUrl) => {
+    expect(() => resolveConfig({ apiKey: "k", baseUrl })).toThrow(DiditConfigurationError);
+  });
+
+  it("rejects whitespace-only API keys", () => {
+    expect(() => resolveConfig({ apiKey: "  " })).toThrow(DiditConfigurationError);
+  });
+
   it("rejects a non-positive timeout", () => {
     expect(() => resolveConfig({ apiKey: "k", timeout: 0 })).toThrow(DiditConfigurationError);
     expect(() => resolveConfig({ apiKey: "k", timeout: -5 })).toThrow(DiditConfigurationError);

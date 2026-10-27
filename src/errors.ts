@@ -63,7 +63,7 @@ export interface DiditAPIErrorDetails {
 }
 
 /**
- * Thrown whenever Didit responds with a non-2xx status. Subclassed per status code so
+ * Thrown for non-2xx statuses or malformed successful responses. Subclassed per status code so
  * callers can branch with `instanceof` instead of checking `.status` directly.
  */
 export class DiditAPIError extends DiditError {

@@ -93,6 +93,42 @@ describe("SessionsResource", () => {
   });
 
   describe("list / listAll", () => {
+    it.each([0, -1, 1.5, Infinity])("rejects non-progressing page limit %s", async (limit) => {
+      const { http, request } = makeHttp();
+      await expect(new SessionsResource(http).list({ limit })).rejects.toThrow(
+        DiditInvalidRequestError,
+      );
+      expect(request).not.toHaveBeenCalled();
+    });
+
+    it("paginates both kinds independently and continues past capped KYB counts", async () => {
+      const { http, request } = makeHttp();
+      request.mockImplementation(({ query }: { query: { session_kind: string; offset: number } }) =>
+        Promise.resolve({
+          data: {
+            count: 100,
+            previous: null,
+            next: null,
+            results:
+              query.session_kind === "user"
+                ? [{ session_id: "user" }]
+                : query.offset === 0
+                  ? [{ session_id: "business-1" }, { session_id: "business-2" }]
+                  : [{ session_id: "business-3" }],
+          },
+          status: 200,
+          headers: {},
+        }),
+      );
+      const ids: string[] = [];
+      for await (const session of new SessionsResource(http).listAll({
+        session_kind: "all",
+        limit: 2,
+      }))
+        ids.push(session.session_id);
+      expect(ids).toEqual(["user", "business-1", "business-2", "business-3"]);
+      expect(request).toHaveBeenCalledTimes(3);
+    });
     it("joins array filters into comma-separated query params", async () => {
       const { http, request } = makeHttp();
       request.mockResolvedValue({

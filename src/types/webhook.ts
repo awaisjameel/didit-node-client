@@ -1,5 +1,30 @@
 import type { Environment, SessionKind, SessionStatus } from "./common";
 import type { SessionDecision } from "./decision";
+import type { NodeResubmission } from "./session";
+
+export type InvestigatorWebhookType = `investigator.${
+  | "report.ready"
+  | "decision.automated"
+  | "decision.overridden"
+  | "decision.contested"
+  | "question.raised"
+  | "automation.paused"
+  | "rfi.answered"
+  | "rfi.overdue"
+  | "drift.detected"
+  | "sla.breached"
+  | "qa.failed"
+  | "external.report.ready"}`;
+
+export type AuthWebhookType = `auth.${
+  | "signup"
+  | "login"
+  | "login_failed"
+  | "password_reset_requested"
+  | "password_reset_completed"
+  | "mfa_changed"
+  | "new_device"
+  | "account_locked"}`;
 
 export type WebhookEventType =
   | "status.updated"
@@ -11,7 +36,9 @@ export type WebhookEventType =
   | "activity.created"
   | "transaction.created"
   | "transaction.status.updated"
-  | "travel_rule.status.updated";
+  | "travel_rule.status.updated"
+  | InvestigatorWebhookType
+  | AuthWebhookType;
 
 export type EntityStatus = "ACTIVE" | "FLAGGED" | "BLOCKED";
 
@@ -24,12 +51,12 @@ export interface WebhookEnvelope {
   created_at: number;
   application_id: string;
   environment: Environment;
-  status: string;
+  status?: string;
 }
 
 export interface ResubmitInfo {
-  node_id: string;
-  feature: string;
+  nodes_to_resubmit: NodeResubmission[];
+  reasons: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -50,7 +77,9 @@ export interface SessionWebhookEvent extends WebhookEnvelope {
   /** Present when `status` is `Approved`, `Declined`, `In Review`, or `Abandoned`. */
   decision?: SessionDecision;
   /** Present when `status` is `Resubmitted`. */
-  resubmit_info?: ResubmitInfo[];
+  resubmit_info?: ResubmitInfo;
+  trigger?: "manual_review" | "manual_step_update" | "ongoing_monitoring";
+  decided_by?: "investigator" | "human";
 }
 
 /** `user.status.updated` / `user.data.updated`. */
@@ -78,9 +107,17 @@ export interface TransactionWebhookEvent extends WebhookEnvelope {
   txn_id?: string;
   score?: number;
   severity?: string;
-  amount?: number;
+  status: "APPROVED" | "IN_REVIEW" | "DECLINED" | "AWAITING_USER";
+  amount?: string;
   currency?: string;
   direction?: string;
+  [key: string]: unknown;
+}
+
+/** Event families whose resource-specific data is available through the index signature. */
+export interface OtherWebhookEvent extends WebhookEnvelope {
+  webhook_type:
+    "activity.created" | "travel_rule.status.updated" | InvestigatorWebhookType | AuthWebhookType;
   [key: string]: unknown;
 }
 
@@ -89,14 +126,15 @@ export type WebhookEvent =
   | UserWebhookEvent
   | BusinessWebhookEvent
   | TransactionWebhookEvent
-  | (WebhookEnvelope & Record<string, unknown>);
+  | OtherWebhookEvent;
 
-export type WebhookSignatureScheme = "v2" | "raw" | "simple";
+export type WebhookSignatureScheme = "v2" | "raw";
 
 export interface WebhookHeaders {
   "x-signature"?: string;
   "x-signature-v2"?: string;
-  "x-signature-simple"?: string;
+  "x-signature-previous"?: string;
+  "x-signature-v2-previous"?: string;
   "x-timestamp"?: string;
   "x-didit-test-webhook"?: string;
   [header: string]: string | string[] | undefined;
@@ -106,6 +144,6 @@ export interface WebhookVerificationResult<T = WebhookEvent> {
   event: T;
   /** Which signature scheme actually validated the request. */
   verifiedWith: WebhookSignatureScheme;
-  /** `true` if Didit marked this as a console "Try Webhook" test delivery. */
+  /** Unsigned informational hint; never use this flag to bypass authorization. */
   isTest: boolean;
 }

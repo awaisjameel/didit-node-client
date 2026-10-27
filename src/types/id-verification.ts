@@ -30,6 +30,8 @@ export interface IdVerificationRequest {
   invalid_mrz_action?: MrzAction;
   /** Default `"DECLINE"`. */
   inconsistent_data_action?: MrzAction;
+  critical_field_occlusion_action?: MrzAction;
+  document_or_personal_number_format_mismatch_action?: MrzAction;
   /** Default `"NO_ACTION"`. */
   expiration_date_not_detected_action?: MrzAction;
   /** Default `"latin"`. */

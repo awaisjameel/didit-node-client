@@ -5,7 +5,6 @@
  *
  * Usage: DIDIT_API_KEY=... DIDIT_WORKFLOW_ID=... node examples/basic-verification.js
  */
-require("dotenv").config();
 const { DiditClient } = require("didit-node-client");
 
 async function main() {

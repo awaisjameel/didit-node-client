@@ -13,14 +13,16 @@ const SENSITIVE_KEYS = new Set([
 
 /** Recursively redacts likely-sensitive keys before they hit a log sink. @internal */
 export function redact(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== "object") return value;
+  if (depth > 6) return REDACTED;
   if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1));
 
-  const result: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    result[key] = SENSITIVE_KEYS.has(key.toLowerCase()) ? REDACTED : redact(val, depth + 1);
-  }
-  return result;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, val]) => [
+      key,
+      SENSITIVE_KEYS.has(key.toLowerCase()) ? REDACTED : redact(val, depth + 1),
+    ]),
+  );
 }
 
 /** Internal logger wrapper: no-ops unless `debug` is enabled, and always redacts secrets. */

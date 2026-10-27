@@ -37,6 +37,12 @@ export class IdVerificationResource {
     appendField(form, "minimum_age", request.minimum_age);
     appendField(form, "invalid_mrz_action", request.invalid_mrz_action);
     appendField(form, "inconsistent_data_action", request.inconsistent_data_action);
+    appendField(form, "critical_field_occlusion_action", request.critical_field_occlusion_action);
+    appendField(
+      form,
+      "document_or_personal_number_format_mismatch_action",
+      request.document_or_personal_number_format_mismatch_action,
+    );
     appendField(
       form,
       "expiration_date_not_detected_action",

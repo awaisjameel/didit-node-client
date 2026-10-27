@@ -78,6 +78,15 @@ export class SessionsResource {
     params?: ListSessionsParams,
     options?: RequestOptions,
   ): Promise<PaginatedResponse<SessionSummary>> {
+    if (params?.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1)) {
+      throw new DiditInvalidRequestError("`limit` must be a positive safe integer.");
+    }
+    if (
+      params?.offset !== undefined &&
+      (!Number.isSafeInteger(params.offset) || params.offset < 0)
+    ) {
+      throw new DiditInvalidRequestError("`offset` must be a non-negative safe integer.");
+    }
     const { data } = await this.http.request<PaginatedResponse<SessionSummary>>({
       method: "GET",
       path: "/v3/sessions/",
@@ -102,6 +111,13 @@ export class SessionsResource {
     params?: Omit<ListSessionsParams, "offset">,
     options?: RequestOptions,
   ): AsyncGenerator<SessionSummary, void, void> {
+    // Didit's merged endpoint derives next from KYC pagination only. Paginate
+    // each kind separately so a short KYC result cannot truncate KYB results.
+    if (params?.session_kind === "all") {
+      yield* this.listAll({ ...params, session_kind: "user" }, options);
+      yield* this.listAll({ ...params, session_kind: "business" }, options);
+      return;
+    }
     let offset = 0;
     const limit = params?.limit ?? 50;
 
@@ -109,7 +125,11 @@ export class SessionsResource {
       const page = await this.list({ ...params, limit, offset }, options);
       for (const item of page.results) yield item;
 
-      if (!page.next || page.results.length === 0) return;
+      if (page.results.length === 0) return;
+      // KYB count is capped; a full page can still have more rows after next
+      // becomes null. Never derive completion from the reported total count.
+      if (!page.next && (params?.session_kind !== "business" || page.results.length < limit))
+        return;
       offset += limit;
     }
   }

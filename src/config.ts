@@ -60,7 +60,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RETRIES = 2;
 
 export function resolveConfig(config: DiditClientConfig): ResolvedConfig {
-  const apiKey = config.apiKey ?? process.env.DIDIT_API_KEY;
+  const apiKey = (config.apiKey ?? process.env.DIDIT_API_KEY)?.trim();
   const baseUrl = (config.baseUrl ?? process.env.DIDIT_BASE_URL ?? DEFAULT_BASE_URL).replace(
     /\/+$/,
     "",
@@ -77,7 +77,7 @@ export function resolveConfig(config: DiditClientConfig): ResolvedConfig {
 
   if (!isValidUrl(baseUrl)) {
     throw new DiditConfigurationError(
-      `\`baseUrl\` must be a valid absolute URL, received: "${baseUrl}"`,
+      "`baseUrl` must be an absolute HTTP(S) URL without credentials, a query or a fragment.",
     );
   }
 
@@ -109,8 +109,14 @@ export function resolveConfig(config: DiditClientConfig): ResolvedConfig {
 
 function isValidUrl(value: string): boolean {
   try {
-    new URL(value);
-    return true;
+    const url = new URL(value);
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
   } catch {
     return false;
   }

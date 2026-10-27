@@ -4,6 +4,7 @@ import { Logger } from "../logger";
 import type { ResolvedConfig } from "../config";
 import {
   DiditConnectionError,
+  DiditInvalidRequestError,
   DiditRateLimitError,
   DiditServerError,
   DiditValidationError,
@@ -43,6 +44,59 @@ function response(status: number, data: unknown, headers: Record<string, unknown
 
 describe("HttpClient", () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it("disables redirects that could forward API keys", () => {
+    makeClient();
+    expect(mockedAxios.create).toHaveBeenCalledWith(expect.objectContaining({ maxRedirects: 0 }));
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid per-request timeout %p before sending or retrying",
+    async (timeout) => {
+      const { client, request } = makeClient();
+      await expect(
+        client.request({ method: "GET", path: "/v3/sessions/", timeout }),
+      ).rejects.toThrow(DiditInvalidRequestError);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([null, [], "not JSON", 42])(
+    "rejects malformed successful JSON responses %p",
+    async (data) => {
+      const { client } = makeClient({}, jest.fn().mockResolvedValue(response(200, data)));
+      await expect(client.request({ method: "GET", path: "/v3/sessions/" })).rejects.toThrow(
+        /invalid JSON object/,
+      );
+    },
+  );
+
+  it("rejects malformed successful PDF responses", async () => {
+    const { client } = makeClient(
+      {},
+      jest.fn().mockResolvedValue(response(200, Buffer.from("HTML error page"))),
+    );
+    await expect(
+      client.request({
+        method: "GET",
+        path: "/v3/session/s/generate-pdf/",
+        responseType: "arraybuffer",
+      }),
+    ).rejects.toThrow(/invalid PDF document/);
+  });
+
+  it("keeps cancellation typed and does not retry an aborted request", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled by caller"));
+    const request = jest
+      .fn()
+      .mockRejectedValue({ isAxiosError: true, code: "ERR_CANCELED", message: "cancelled" });
+    const { client } = makeClient({}, request);
+    await expect(
+      client.request({ method: "GET", path: "/v3/sessions/", signal: controller.signal }),
+    ).rejects.toThrow(DiditConnectionError);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 
   it("sends x-api-key, User-Agent, and JSON content-type headers", async () => {
     const request = jest.fn().mockResolvedValue(response(200, { ok: true }));
